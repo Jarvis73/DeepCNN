@@ -33,159 +33,147 @@ References:
 
 """
 
+from . import base
+
 from tensorflow import keras as K
 
 L = K.layers
 
 
-class ResBlock(object):
+class ResBlock(base.BaseNet):
     def __init__(self,
                  input_channels,
                  output_channels,
                  strides=1,
-                 drop_rate=0, 
-                 kernel_initializer="he_normal",
-                 weight_decay=0.,
-                 use_bottleneck=True, 
-                 name=None):
-        if name:
-            name = name + "/"
-        else:
-            name = ""
-        self.name = name
+                 drop_rate=0,
+                 use_bottleneck=True,
+                 bn_params=None,
+                 name=None,
+                 **kwargs):
+        """
+        Notice that this implementation of BasicBlock and Bottleneck do downsampling
+        in the `first` conv3x3 layer. It seems that downsampling in first conv1x1 or
+        conv3x3 will get similar results.
 
-        regu = K.regularizers.l2(weight_decay)
-        bn_params = {"momentum": 0.9, "epsilon": 1e-5}
-        conv_params = {"use_bias": False, "kernel_initializer": kernel_initializer,
-                       "kernel_regularizer": regu}
+        See discussion in https://github.com/pytorch/vision/issues/191 for details.
+
+        """
+        super(ResBlock, self).__init__(name)
 
         self.layers = []
         if not use_bottleneck:
-            self.layers.append(L.BatchNormalization(name=name + "norm1", **bn_params))
-            self.layers.append(L.ReLU(name=name + "relu1"))
-            self.layers.append(L.Conv2D(output_channels, 3, strides=strides, padding="same",
-                                        name=name + "conv1", **conv_params))
+            self.layers.append(L.BatchNormalization(name=self.name + "norm1", **bn_params))
+            self.layers.append(L.ReLU(name=self.name + "relu1"))
+            self.layers.append(L.Conv2D(output_channels, 3, strides, name=self.name + "conv1", **kwargs))
             if drop_rate > 0:
-                self.layers.append(L.Dropout(drop_rate, name=name + "dropout"))
-            self.layers.append(L.BatchNormalization(name=name + "norm2", **bn_params))
-            self.layers.append(L.ReLU(name=name + "relu2"))
-            self.layers.append(L.Conv2D(output_channels, 3, strides=1, padding="same",
-                                        name=name + "conv2", **conv_params))
+                self.layers.append(L.Dropout(drop_rate, name=self.name + "dropout"))
+            self.layers.append(L.BatchNormalization(name=self.name + "norm2", **bn_params))
+            self.layers.append(L.ReLU(name=self.name + "relu2"))
+            self.layers.append(L.Conv2D(output_channels, 3, 1, name=self.name + "conv2", **kwargs))
         else:
-            self.layers.append(L.BatchNormalization(name=name + "norm1", **bn_params))
-            self.layers.append(L.ReLU(name=name + "relu1"))
-            self.layers.append(L.Conv2D(output_channels, 1, name=name + "conv1", **conv_params))
-            self.layers.append(L.BatchNormalization(name=name + "norm2", **bn_params))
-            self.layers.append(L.ReLU(name=name + "relu2"))
-            self.layers.append(L.Conv2D(output_channels, 3, strides=strides, padding="same",
-                                        name=name + "conv2", **conv_params))
+            self.layers.append(L.BatchNormalization(name=self.name + "norm1", **bn_params))
+            self.layers.append(L.ReLU(name=self.name + "relu1"))
+            self.layers.append(L.Conv2D(output_channels, 1, name=self.name + "conv1", **kwargs))
+            self.layers.append(L.BatchNormalization(name=self.name + "norm2", **bn_params))
+            self.layers.append(L.ReLU(name=self.name + "relu2"))
+            self.layers.append(L.Conv2D(output_channels, 3, strides, name=self.name + "conv2", **kwargs))
             if drop_rate > 0:
-                self.layers.append(L.Dropout(drop_rate, name=name + "dropout"))
-            self.layers.append(L.BatchNormalization(name=name + "norm3", **bn_params))
-            self.layers.append(L.ReLU(name=name + "relu3"))
-            self.layers.append(L.Conv2D(output_channels * 4, 1, name=name + "conv3", **conv_params))
+                self.layers.append(L.Dropout(drop_rate, name=self.name + "dropout"))
+            self.layers.append(L.BatchNormalization(name=self.name + "norm3", **bn_params))
+            self.layers.append(L.ReLU(name=self.name + "relu3"))
+            self.layers.append(L.Conv2D(output_channels * 4, 1, name=self.name + "conv3", **kwargs))
         
         self.shortcuts = []
         if strides != 1 or use_bottleneck or input_channels != output_channels:
             # TODO(Alter): Maybe use max_pool when stride != 1
-            self.shortcuts.append(L.BatchNormalization(name=name + "norms", **bn_params))
-            self.shortcuts.append(L.ReLU(name=name + "relus"))
-            self.shortcuts.append(L.Conv2D(output_channels * (4 if use_bottleneck else 1), 1, strides=strides,
-                                           name=name + "convs", **conv_params))
+            self.shortcuts.append(L.BatchNormalization(name=self.name + "norms", **bn_params))
+            self.shortcuts.append(L.ReLU(name=self.name + "relus"))
+            self.shortcuts.append(L.Conv2D(output_channels * (4 if use_bottleneck else 1), 1, strides,
+                                           name=self.name + "convs", **kwargs))
+        # Must use keras.layers.add, instead of tf.add
+        self.add = L.Add(name=self.name + "add")
 
-    def __call__(self, inputs):
+    def __call__(self, inputs, *args, **kwargs):
         residual = inputs
         for layer in self.layers:
             residual = layer(residual)
         shortcut = inputs
         for layer in self.shortcuts:
             shortcut = layer(shortcut)
-        # Must use keras.layers.add, instead of tf.add
-        return L.add([residual, shortcut], name=self.name + "add")
+        return self.add([residual, shortcut])
 
 
-class ResModule(object):
+class ResModule(base.BaseNet):
     def __init__(self,
                  input_channels,
                  output_channels,
                  num_blocks, 
                  strides,
-                 drop_rate=0, 
-                 kernel_initializer="he_normal",
-                 weight_decay=0.,
-                 use_bottleneck=True, 
-                 name=None):
-        if name:
-            name = name + "/"
-        else:
-            name = ""
-
-        block_params = {"drop_rate": drop_rate, "kernel_initializer": kernel_initializer,
-                        "weight_decay": weight_decay, "use_bottleneck": use_bottleneck}
+                 drop_rate=0,
+                 use_bottleneck=True,
+                 bn_params=None,
+                 name=None,
+                 **kwargs):
+        super(ResModule, self).__init__(name)
 
         self.blocks = []
         for i in range(num_blocks):
             self.blocks.append(ResBlock(input_channels, output_channels, 1 if i != 0 else strides,
-                                        name=name + ("block%d" % (i + 1)), **block_params))
+                                        drop_rate, use_bottleneck, bn_params,
+                                        name=self.name + ("block%d" % (i + 1)), **kwargs))
             input_channels = output_channels * (4 if use_bottleneck else 1)
 
-    def __call__(self, inputs):
+    def __call__(self, inputs, *args, **kwargs):
         x = inputs
         for block in self.blocks:
             x = block(x)
-        
         return x
 
 
-class ResNetV2(object):
+class ResNetV2(base.BaseNet):
     def __init__(self,
                  base_channels, 
                  num_classes,
                  block_num,
                  first_downsample=True,
                  drop_rate=0,
-                 kernel_initializer="he_normal",
                  weight_decay=0.,
                  use_bottleneck=True, 
                  use_head=True,
-                 name=None):
-        if name:
-            name = name + "/"
-        else:
-            name = ""
-
-        regu = K.regularizers.l2(weight_decay)
-        block_params = {"drop_rate": drop_rate, "kernel_initializer": kernel_initializer,
-                        "weight_decay": weight_decay, "use_bottleneck": use_bottleneck}
-        conv_params = {"padding": "same", "use_bias": True, "kernel_initializer": kernel_initializer,
-                       "kernel_regularizer": regu}
-        bn_params = {"momentum": 0.9, "epsilon": 1e-5}
+                 bn_params=None,
+                 name=None,
+                 **kwargs):
+        super(ResNetV2, self).__init__(name)
+        conv_params = {"padding": "same", "use_bias": True,
+                       "kernel_regularizer": K.regularizers.l2(weight_decay) if weight_decay > 0. else None}
+        conv_params.update(kwargs)
+        bn_params = bn_params or {"momentum": 0.9, "epsilon": 1e-5}
         
         self.modules = []
         if first_downsample:
-            self.modules.append(L.Conv2D(base_channels, 7, 2, name=name + "conv", **conv_params))
-            self.modules.append(L.MaxPool2D(3, 2, padding="same", name=name + "pool"))
+            self.modules.append(L.Conv2D(base_channels, 7, 2, name=self.name + "conv", **conv_params))
+            self.modules.append(L.MaxPool2D(3, 2, padding="same", name=self.name + "pool"))
         else:
-            self.modules.append(L.Conv2D(base_channels, 3, name=name + "conv", **conv_params))
+            self.modules.append(L.Conv2D(base_channels, 3, name=self.name + "conv", **conv_params))
 
         input_channels = base_channels
         output_channels = input_channels
+        conv_params["use_bias"] = False
         for i, num_blocks in enumerate(block_num):
             self.modules.append(ResModule(input_channels, output_channels, num_blocks,
-                                          strides=1 + int(i != 0), **block_params,
-                                          name=name + ("module%d" % (i + 1))))
+                                          1 + int(i != 0), drop_rate, use_bottleneck, bn_params,
+                                          name=self.name + ("module%d" % (i + 1)), **conv_params))
             input_channels = output_channels * (4 if use_bottleneck else 1)
             output_channels = output_channels * 2
 
         # Final bn+relu
-        self.modules.append(L.BatchNormalization(name=name + "postnorm", **bn_params))
-        self.modules.append(L.ReLU(name=name + "postrelu"))
+        self.modules.append(L.BatchNormalization(name=self.name + "postnorm", **bn_params))
+        self.modules.append(L.ReLU(name=self.name + "postrelu"))
         if use_head:
-            self.modules.append(L.GlobalAveragePooling2D(name=name + "avgpool"))
-            self.modules.append(L.Dense(num_classes, name=name + "fc"))
-            # self.modules.append(L.Softmax(name=name + "softmax"))
+            self.modules.append(L.GlobalAveragePooling2D(name=self.name + "avgpool"))
+            self.modules.append(L.Dense(num_classes, name=self.name + "fc"))
 
-    def __call__(self, inputs):
+    def __call__(self, inputs, *args, **kwargs):
         x = inputs
         for module in self.modules:
             x = module(x)
@@ -197,29 +185,33 @@ def resnet_v2(layers,
               num_classes=1000,
               first_downsample=True,
               drop_rate=0,
-              kernel_initializer="he_normal",
               weight_decay=0.,
               use_head=True,
-              name=None):
-    kwargs = {"base_channels": base_channels,
+              bn_params=None,
+              name=None,
+              **kwargs):
+    params = {"base_channels": base_channels,
               "num_classes": num_classes,
               "first_downsample": first_downsample,
               "drop_rate": drop_rate,
-              "kernel_initializer": kernel_initializer,
               "weight_decay": weight_decay,
               "use_head": use_head,
+              "bn_params": bn_params,
               "name": name or ("resnet_v2_%d" % layers)}
-    if layers == 18:
-        return ResNetV2(block_num=[2, 2, 2, 2], use_bottleneck=False, **kwargs)
-    elif layers == 34:
-        return ResNetV2(block_num=[3, 4, 6, 3], use_bottleneck=False, **kwargs)
-    elif layers == 50:
-        return ResNetV2(block_num=[3, 4, 6, 3], use_bottleneck=True, **kwargs)
-    elif layers == 101:
-        return ResNetV2(block_num=[3, 4, 23, 3], use_bottleneck=True, **kwargs)
-    elif layers == 152:
-        return ResNetV2(block_num=[3, 8, 36, 3], use_bottleneck=True, **kwargs)
-    elif layers == 200:
-        return ResNetV2(block_num=[3, 24, 36, 3], use_bottleneck=True, **kwargs)
+    params.update(kwargs)
+
+    _configs = {
+        18:  {"block_num": [2, 2, 2, 2], "use_bottleneck": False},
+        34:  {"block_num": [3, 4, 6, 3], "use_bottleneck": False},
+        50:  {"block_num": [3, 4, 6, 3], "use_bottleneck": True},
+        101: {"block_num": [3, 4, 23, 3], "use_bottleneck": True},
+        152: {"block_num": [3, 8, 36, 3], "use_bottleneck": True},
+        200: {"block_num": [3, 24, 36, 3], "use_bottleneck": True},
+    }
+
+    if layers in _configs:
+        return ResNetV2(block_num=_configs[layers]["block_num"],
+                        use_bottleneck=_configs[layers]["use_bottleneck"],
+                        **params)
     else:
         raise NotImplementedError

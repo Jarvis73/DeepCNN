@@ -24,14 +24,14 @@ L = K.layers
 
 class VanillaEmbedding(object):
     def __init__(self, filter_list, name=None):
-        self.name = name or "Embedding"
+        self.name = name + "/" if name else "Embedding/"
         self.embedding = K.Sequential()
         for i, num_filters in enumerate(filter_list):
-            self.embedding.add(L.Conv2D(num_filters, 3, padding="same"))
-            self.embedding.add(L.BatchNormalization())
-            self.embedding.add(L.ReLU())
-            self.embedding.add(L.MaxPool2D())
-        self.embedding.add(L.Flatten())
+            self.embedding.add(L.Conv2D(num_filters, 3, padding="same", name=self.name + ("layer%d/conv" % (i + 1))))
+            self.embedding.add(L.BatchNormalization(name=self.name + ("layer%d/norm" % (i + 1))))
+            self.embedding.add(L.ReLU(name=self.name + ("layer%d/relu" % (i + 1))))
+            self.embedding.add(L.MaxPool2D(name=self.name + ("layer%d/pool" % (i + 1))))   # [bs, 1, 1, 64]
+        self.embedding.add(L.Flatten())         # [bs, 64]
 
     def __call__(self, inputs, *args, **kwargs):
         return self.embedding(inputs, *args, **kwargs)
@@ -41,7 +41,8 @@ class FceG(object):
     def __init__(self, num_unit, name=None, **kwargs):
         self.name = name or "fce_g"
         self.num_unit = num_unit
-        self.bi_lstm = L.Bidirectional(L.LSTM(num_unit, return_sequences=True, **kwargs), merge_mode="sum")
+        with tf.variable_scope(self.name):
+            self.bi_lstm = L.Bidirectional(L.LSTM(num_unit, return_sequences=True, **kwargs), merge_mode="sum")
 
     def __call__(self, inputs, *args, **kwargs):
         input_shape = inputs.get_shape().as_list()
@@ -58,7 +59,8 @@ class FceF(object):
         self.name = name or "fce_f"
         self.num_unit = num_unit
         self.process_steps = process_steps
-        self.lstm = L.LSTMCell(num_unit, **kwargs)
+        with tf.variable_scope(self.name):
+            self.lstm = L.LSTMCell(num_unit, **kwargs)
         self.reuse = False
 
     def __call__(self, inputs, content, *args, **kwargs):
@@ -108,13 +110,38 @@ class FceF(object):
 
 
 class MatchingNetwork(object):
-    def __init__(self, embedding_filter_list, process_steps, name=None):
+    def __init__(self, embedding_filter_list, num_classes, process_steps, fce=False, eps=1e-10, name=None):
         self.name = name or "MatchingNetwork"
+        self.fce = fce
+        self.eps = eps
+        self.num_classes = num_classes
+
         self.embedding = VanillaEmbedding(embedding_filter_list)
         self.fce_g = FceG(embedding_filter_list[-1])
         self.fce_f = FceF(embedding_filter_list[-1], process_steps)
 
     def __call__(self, sup_inputs, sup_labels, que_inputs):
         sup_input_list = tf.unstack(sup_inputs, axis=1)
-        sup_embeded = [self.embedding(sup_input) for sup_input in sup_input_list]
+        sup_embedded = [self.embedding(sup_input) for sup_input in sup_input_list]
+        que_embedded = self.embedding(que_inputs)
+        if self.fce:
+            # Apply full context embedding
+            stacked_sup_embedded = tf.stack(sup_embedded, axis=1)
+            g_encoded = self.fce_g(stacked_sup_embedded)
+            f_encoded = self.fce_f(que_embedded, g_encoded)
+        else:
+            g_encoded = sup_embedded    # [bs, time_steps, num_unit]
+            f_encoded = que_embedded    # [bs, num_unit]
 
+        # Compute cosine distance
+        with tf.variable_scope("Distance"):
+            f_encoded = tf.expand_dims(f_encoded, axis=1)
+            dot_product = tf.reduce_sum(g_encoded * f_encoded, axis=-1)     # [bs, time_steps]
+            sup_norm = tf.rsqrt(tf.clip_by_value(tf.reduce_sum(g_encoded ** 2, axis=-1), self.eps, float("inf")))
+            que_norm = tf.rsqrt(tf.clip_by_value(tf.reduce_sum(f_encoded ** 2, axis=-1), self.eps, float("inf")))
+            cosine_similarity = dot_product * sup_norm * que_norm
+
+        att_kernel = tf.nn.softmax(cosine_similarity)           # [bs, time_steps]
+        one_hot = tf.one_hot(sup_labels, self.num_classes)      # [bs, time_steps, num_classes]
+        logits = tf.reduce_sum(tf.expand_dims(att_kernel, axis=-1) * one_hot, axis=1)     # [bs, num_classes]
+        return logits

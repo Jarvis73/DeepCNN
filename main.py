@@ -16,16 +16,16 @@
 
 import argparse
 import collections
+from pathlib import Path
 
 import tensorflow as tf
 from tensorflow import keras as K
-from pathlib import Path
 
-from utils import timer, summary_kits, tools
-from utils import logger as logging
+from data_kits import data_factory as factory
 from lib import solver, transforms
-from lib import dataloader_cifar10, dataloader_cifar100
-from networks import resnet_v2
+import networks as net_lib
+from utils import logger as logging
+from utils import timer, summary_kits, tools
 
 version = [int(x) for x in tf.__version__.split(".")]
 if version[0] == 1 and version[1] >= 14:
@@ -59,69 +59,25 @@ def get_parser():
     group.add_argument("--mix_alpha", type=float, default=0.2, help="The lambda parameter for mixup method")
 
     group = parser.add_argument_group(title="Model Arguments")
-    group.add_argument("--net-name", default="resnet_v2_18", type=str, help="the name for network to use")
-    group.add_argument("--init_channel", default=64, type=int, help="Output channel of the first conv layer")
+    group.add_argument("--net_name", default="resnet_v2_18", type=net_lib.checker, help="the name for network to use")
+    group.add_argument("--init_channel", type=int, help="Output channel of the first conv layer(default: 64 for resnet")
     group.add_argument("-dr", "--drop_rate", default=0, type=float, help='dropout rate')
-    group.add_argument("-wd", "--weight_decay", default=5e-4, type=float)
+    group.add_argument("-wd", "--weight_decay",
+                       default=1e-4, type=float, help="Weight decay rate. (default %(default)f)")
     group.add_argument("--ckpt", type=str, help="You can specify a checkpoint for restoring. "
                                                 "If not specified, the program will try to restore checkpoint "
                                                 "from 'model_dir/tag' directory.")
-    group.add_argument("-sb", "--save_best_ckpt", action="store_true")
-    group.add_argument("-lb", "--load_best_ckpt", action="store_true")
+    group.add_argument("-sb", "--save_best_ckpt", action="store_true", help="Save best checkpoint")
+    group.add_argument("-lb", "--load_best_ckpt", action="store_true", help="Load best checkpoint")
+
+    group = parser.add_argument_group(title="Densenet Arguments")
+    group.add_argument("--no_bottleneck", action="store_true")
+    group.add_argument("--compression", type=float, default=0.5)
+    group.add_argument("--layers_per_block", type=int, nargs="+")
+    group.add_argument("--growth_rate", type=int)
 
     solver.add_arguments(parser)
     return parser
-
-
-def get_dataset(dataset, mode, batch_size, num_workers, train_val_split=True):
-    if mode == "train":
-        if dataset == "cifar10":
-            wrapper = dataloader_cifar10.cifar10_dataset(
-                "./", train_flag=True, batch_size=batch_size, train_val_split=train_val_split,
-                num_workers=num_workers)
-            wrapper["num_classes"] = 10
-            wrapper["first_downsample"] = False
-        elif dataset == "cifar100":
-            wrapper = dataloader_cifar100.cifar100_dataset(
-                "./", train_flag=True, batch_size=batch_size, train_val_split=train_val_split,
-                num_workers=num_workers)
-            wrapper["num_classes"] = 100
-            wrapper["first_downsample"] = False
-        else:
-            raise ValueError("Not supported dataset")
-
-        train_iter = wrapper["train"]["data"].make_initializable_iterator()
-        wrapper["train"]["iter"] = train_iter
-        wrapper["train"]["steps"] = wrapper["train"]["size"] // batch_size
-        wrapper["parent_iter"] = train_iter
-
-        if train_val_split:
-            val_iter = wrapper["val"]["data"].make_initializable_iterator()
-            handler = tf.placeholder(tf.string, shape=(), name="Handler")
-            iterator = tf.data.Iterator.from_string_handle(
-                handler, train_iter.output_types, train_iter.output_shapes, train_iter.output_classes)
-            wrapper["val"]["iter"] = val_iter
-            wrapper["parent_iter"] = iterator
-            wrapper["handler"] = handler
-    elif mode == "test":
-        if dataset == "cifar10":
-            wrapper = dataloader_cifar10.cifar10_dataset(
-                "./", train_flag=False, batch_size=batch_size, num_workers=num_workers)
-            wrapper["num_classes"] = 10
-            wrapper["first_downsample"] = False
-        elif dataset == "cifar100":
-            wrapper = dataloader_cifar100.cifar100_dataset(
-                "./", train_flag=False, batch_size=batch_size, num_workers=num_workers)
-            wrapper["num_classes"] = 100
-            wrapper["first_downsample"] = False
-        else:
-            raise ValueError("Not supported dataset")
-        test_iter = wrapper["test"]["data"].make_initializable_iterator()
-        wrapper["parent_iter"] = test_iter
-        wrapper["test"]["steps"] = wrapper["test"]["size"] // batch_size
-    else:
-        raise NotImplementedError
-    return wrapper
 
 
 def get_model(x_images, y_labels, mode, dataset, args):
@@ -147,15 +103,21 @@ def get_model(x_images, y_labels, mode, dataset, args):
     scaffold: dict
         A scaffold contains fetches, optimizer, metrics, summary writer, saver, etc.
     """
+    inputs = K.Input(tensor=x_images)
     if "resnet_v2" in args.net_name:
-        resnet = resnet_v2.resnet_v2(int(args.net_name.split("_")[-1]), args.init_channel,
-                                     dataset["num_classes"], dataset["first_downsample"],
-                                     args.drop_rate, weight_decay=args.weight_decay)
-        inputs = K.Input(tensor=x_images)
-        y_logits = resnet(inputs)
+        kwargs = {"kernel_initializer": "he_normal"}
+        net = net_lib.resnet_v2(int(args.net_name.split("_")[2]), args.init_channel or 64,
+                                dataset["num_classes"], dataset["first_downsample"],
+                                args.drop_rate, weight_decay=args.weight_decay, **kwargs)
+    elif "densenet" in args.net_name:
+        net = net_lib.densenet(int(args.net_name.split("_")[1]), dataset["num_classes"],
+                               dataset["first_downsample"], args.init_channel, args.growth_rate,
+                               args.layers_per_block, not args.no_bottleneck, args.compression,
+                               args.drop_rate, args.weight_decay)
     else:
         raise NotImplementedError
 
+    y_logits = net(inputs)
     model = K.Model(inputs=inputs, outputs=y_logits)
     scaffold = {"model": model}
 
@@ -208,6 +170,8 @@ def train(args, dataset, scaffold, logger):
     metrics = scaffold["metrics"]
     summaries = scaffold["summaries"]
     require_val = not args.no_val
+
+    logger.info(optimizer)
 
     # After create session
     sess.run(tf.global_variables_initializer())
@@ -363,7 +327,8 @@ def main():
         if args.mode == "train":
             # Dataset
             with tf.name_scope("DataLoader"):
-                dataset = get_dataset(args.dataset, "train", args.batch_size, args.workers, not args.no_val)
+                dataset = factory.small_dataset(args.dataset, "train", args.batch_size, args.workers,
+                                                train_val_split=not args.no_val)
                 x_images, y_labels = dataset["parent_iter"].get_next()
             if args.mixup:
                 with tf.name_scope("Switch"):
@@ -374,12 +339,13 @@ def main():
 
                     def false_fn():
                         return x_images, y_labels
+
                     x_images, y_labels = tf.cond(K.backend.learning_phase(), true_fn, false_fn)
             scaffold = get_model(x_images, y_labels, args.mode, dataset, args)
             train(args, dataset, scaffold, logger)
         elif args.mode == "test":
             with tf.name_scope("DataLoader"):
-                dataset = get_dataset(args.dataset, "test", args.batch_size, args.workers)
+                dataset = factory.small_dataset(args.dataset, "test", args.batch_size, args.workers)
                 x_images, y_labels = dataset["parent_iter"].get_next()
             scaffold = get_model(x_images, y_labels, args.mode, dataset, args)
             test(args, dataset, scaffold, logger)

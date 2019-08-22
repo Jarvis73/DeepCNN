@@ -21,14 +21,29 @@ Try to set better baseline for famous CNN models. Build model with Keras and tra
 
 ## 2. Model Zoo
 
-| #    | Model         | config    | Cifar10 | Cifar100 |
-| ---- | ------------- | --------- | ------- | -------- |
-|      | VGG           |           |         |          |
-|      | Resnet        |           |         |          |
-| 001  | Preact-Resnet | 18 layers | 0.947   |          |
-| 002  |               | 34 layers | 0.949   |          |
-| 003  |               | 50 layers | 0.940   |          |
-|      | DenseNet      |           |         |          |
+**Note:** All the results listed below are computed on test set and I choice the better one from the final checkpoint and the best (on validation set) checkpoint. Validation set is random chosen from training set. Final checkpoint will always be saved and provide `--save_best_ckpt` option for saving best checkpoint (details please check `./run_scripts/*.sh` script files).
+
+### 2.1 Vanilla Models
+
+| #    | Model         | config     | Cifar10 | Cifar100 |
+| ---- | ------------- | ---------- | ------- | -------- |
+|      | VGG           |            |         |          |
+|      | Resnet        |            |         |          |
+| 001  | Preact-Resnet | 18 layers  | 0.947   | 0.748    |
+| 002  |               | 34 layers  | 0.949   | 0.759    |
+| 003  |               | 50 layers  | 0.940   |          |
+|      | DenseNet      | 121 layers |         |          |
+
+### 2.2 Improved Models
+
+| #    | Model         | config    | Improvement | Cifar10 | Cifar100 |
+| ---- | ------------- | --------- | ----------- | ------- | -------- |
+|      | VGG           |           |             |         |          |
+|      | Resnet        |           |             |         |          |
+| 004  | Preact-Resnet | 18 layers | mixup       | 0.953   |          |
+| 005  |               | 34 layers | mixup       | 0.955   |          |
+| 006  |               | 50 layers | mixup       | 0.950   |          |
+|      | DenseNet      |           |             |         |          |
 
 
 
@@ -74,5 +89,5 @@ One can re-run the bash files in `./run_scripts` directory to reproduce results 
 
 ## 5. Acknowledgement
 
-* This repo references [Fenghz's PyTorch implementation](https://github.com/FengHZ/mixupfamily). It is better to compare two implementations for understanding some details.
+* This repo references [FengHZ's PyTorch implementation](https://github.com/FengHZ/mixupfamily). It is better to compare two implementations for understanding some details.
 
