@@ -8,14 +8,15 @@ Try to set better baseline for famous CNN models. Build model with Keras and tra
 * python==3.6
 * tensorflow-gpu==1.13.1
 * numpy==1.16.4
-* pathlib=1.0.1
-
+* pathlib==1.0.1
+* opencv==3.4.3
 
 
 ## 1. Datasets
 
-- **Cifar10** (Auto-download)
-- **Cifar100** (Auto-download)
+- **Cifar10** (Auto-download): 60000 32x32 color images in 10 classes, with 6000 images per class. There are 50000 training images and 10000 test images.
+- **Cifar100** (Auto-download): 60000 32x32 color images in 100 classes with 600 images per class. There are 50000 training images and 10000 test images. 
+- **Omniglot** ([Download Link](https://github.com/brendenlake/omniglot)): 50 alphabets, 15~40 characters in each alphabet, 20 samples per character
 
 
 
@@ -80,8 +81,10 @@ One can re-run the bash files in `./run_scripts` directory to reproduce results 
 
 ### 4.2 Data Augmentation
 
+* [x] Traditional augmentation
+* [ ] More augmentation
 * [x] Mixup
-* [ ] Manifold Mixup
+* [ ] Manifold mixup
 
 ### 4.3 Others
 
@@ -90,4 +93,4 @@ One can re-run the bash files in `./run_scripts` directory to reproduce results 
 ## 5. Acknowledgement
 
 * This repo references [FengHZ's PyTorch implementation](https://github.com/FengHZ/mixupfamily). It is better to compare two implementations for understanding some details.
-
+* Some API implementation referenced from PyTorch source code. 
