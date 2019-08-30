@@ -16,7 +16,7 @@ Try to set better baseline for famous CNN models. Build model with Keras and tra
 
 - **Cifar10** (Auto-download): 60000 32x32 color images in 10 classes, with 6000 images per class. There are 50000 training images and 10000 test images.
 - **Cifar100** (Auto-download): 60000 32x32 color images in 100 classes with 600 images per class. There are 50000 training images and 10000 test images. 
-- **Omniglot** ([Download Link](https://github.com/brendenlake/omniglot)): 50 alphabets, 15~40 characters in each alphabet, 20 samples per character
+- **Omniglot** ([Download Link](https://github.com/brendenlake/omniglot)): 50 alphabets, 15~40 characters in each alphabet, 20 samples per character. There are 1623 classes, 32460 images(1623 * 20) in total. 964 classes for training and 659 classes for evaluation.
 
 
 
@@ -29,11 +29,13 @@ Try to set better baseline for famous CNN models. Build model with Keras and tra
 | #    | Model         | config     | Cifar10 | Cifar100 |
 | ---- | ------------- | ---------- | ------- | -------- |
 |      | VGG           |            |         |          |
-|      | Resnet        |            |         |          |
-| 001  | Preact-Resnet | 18 layers  | 0.947   | 0.748    |
-| 002  |               | 34 layers  | 0.949   | 0.759    |
-| 003  |               | 50 layers  | 0.940   |          |
-|      | DenseNet      | 121 layers |         |          |
+| 11   | Resnet        | 18 layers  | 0.944   | 0.735    |
+| 12   |               | 101 layers |         |          |
+| 01   | Preact-Resnet | 18 layers  | 0.947   | 0.748    |
+| 02   |               | 34 layers  | 0.949   | 0.759    |
+| 03   |               | 50 layers  | 0.944   | 0.771    |
+| 21   | DenseNet      | 121 layers | 0.945   | 0.762    |
+| 22   |               | 100 layers | 0.948   |          |
 
 ### 2.2 Improved Models
 
@@ -41,10 +43,18 @@ Try to set better baseline for famous CNN models. Build model with Keras and tra
 | ---- | ------------- | --------- | ----------- | ------- | -------- |
 |      | VGG           |           |             |         |          |
 |      | Resnet        |           |             |         |          |
-| 004  | Preact-Resnet | 18 layers | mixup       | 0.953   |          |
-| 005  |               | 34 layers | mixup       | 0.955   |          |
-| 006  |               | 50 layers | mixup       | 0.950   |          |
+| 04   | Preact-Resnet | 18 layers | mixup       | 0.953   |          |
+| 05   |               | 34 layers | mixup       | 0.955   |          |
+| 06   |               | 50 layers | mixup       | 0.950   |          |
 |      | DenseNet      |           |             |         |          |
+
+### 2.3 Few-Shot Models
+
+| #    | Model            | config  | Omniglot |
+| ---- | ---------------- | ------- | -------- |
+| 01   | Matching Network | 5-w-1-s | 0.967    |
+|      |                  |         |          |
+|      |                  |         |          |
 
 
 
@@ -75,9 +85,17 @@ One can re-run the bash files in `./run_scripts` directory to reproduce results 
 ### 4.1 Networks
 
 * [ ] VGG
-* [ ] Resnet
+* [x] Resnet
 * [x] Preact-Resnet
-* [ ] DenseNet
+* [ ] Wide-Resnet
+* [ ] ResNeXt
+* [ ] Inception
+* [ ] GoogLenet
+* [ ] Xception
+* [x] DenseNet
+* [ ] MobileNet
+* [ ] ShuffleNet
+* [ ] SENet
 
 ### 4.2 Data Augmentation
 
@@ -86,7 +104,11 @@ One can re-run the bash files in `./run_scripts` directory to reproduce results 
 * [x] Mixup
 * [ ] Manifold mixup
 
-### 4.3 Others
+### 4.3 Few-Shot Learning
+
+* [ ] Matching Networks
+* [ ] Siamese Networks
+* [ ] Prototypical Networks
 
 
 

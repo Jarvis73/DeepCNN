@@ -15,14 +15,10 @@
 # =================================================================================
 
 import argparse
-from .resnet import resnet
-from .resnet_v2 import resnet_v2
-from .densenet import densenet
+from .matchingnet import MatchingNetwork
 
 __all__ = [
-    "resnet",
-    "resnet_v2",
-    "densenet"
+    "matchingnetwork"
 ]
 
 
@@ -32,9 +28,9 @@ def checker(net):
     parts = net.split("_")
 
     net_name = parts[0]
-    if parts[1] == "v2":
+    if len(parts) > 1 and parts[1] == "v2":
         net_name += "_v2"
     if net_name not in __all__:
-        raise argparse.ArgumentError("`net-name` must start with {}, but got {}"
+        raise argparse.ArgumentError("`net_name` must start with {}, but got {}"
                                      .format(__all__, net_name))
     return net

@@ -22,8 +22,8 @@ import tensorflow as tf
 from tensorflow import keras as K
 
 from data_kits import data_factory as factory
-from lib import solver, transforms
-import networks as net_lib
+from lib import solver
+from networks import few_shot as net_lib
 from utils import logger as logging
 from utils import timer, summary_kits, tools
 
@@ -34,7 +34,7 @@ if version[0] == 1 and version[1] >= 14:
     deprecation._PRINT_DEPRECATION_WARNINGS = False
 
 __all_dataset = [
-    "cifar10", "cifar100"
+    "omniglot"
 ]
 
 
@@ -44,57 +44,62 @@ def get_parser():
     group.add_argument("--mode", default="train", type=str, choices=["train", "test", "infer"])
     group.add_argument("--tag", type=str, required=True, help="Model tag")
     group.add_argument("--model_dir", type=str)
-    group.add_argument("--log_step", default=10000000, type=int, help="Step interval for logging train info")
+    group.add_argument("--log_step", type=int, default=10000000, help="Step interval for logging train info")
     group.add_argument("--log_file", type=str, help="Logging output into")
 
     group = parser.add_argument_group(title="Dataset Arguments")
-    group.add_argument("--dataset", default="cifar10", type=str, choices=__all_dataset,
-                       help="The dataset name")
-    group.add_argument("-j", "--workers", default=4, type=int, help="number of data loading workers "
-                                                                    "(default: 4)")
-    group.add_argument("-b", "--batch_size", default=256, type=int, help="mini-batch size (default: %(default)d)")
+    group.add_argument("--dataset", type=str, default="omniglot", choices=__all_dataset, help="The dataset name")
+    group.add_argument("-b", "--batch_size", type=int, default=4, help="mini-batch size (default: %(default)d)")
     group.add_argument("--no_val", action="store_true", help="If set, then don't split validation set "
                                                              "from training set.")
 
-    group = parser.add_argument_group(title="Data Arguments")
-    group.add_argument("--mixup", action="store_true", help="Use mixup data augmentation strategy")
-    group.add_argument("--mix_manifold", action="store_true", help="Use manifold mixup strategy")
-    group.add_argument("--mix_layer", type=int, nargs="+", help="The mixup layer list for manifold mixup strategy")
-    group.add_argument("--mix_alpha", type=float, default=0.2, help="The lambda parameter for mixup method")
-
     group = parser.add_argument_group(title="Model Arguments")
-    group.add_argument("--net_name", default="resnet_v2_18", type=net_lib.checker, help="the name for network to use")
+    group.add_argument("--net_name", type=net_lib.checker,
+                       default="matchingnetwork", help="the name for network to use")
     group.add_argument("--init_channel", type=int, help="Output channel of the first conv layer(default: 64 for resnet")
-    group.add_argument("-dr", "--drop_rate", default=0, type=float, help='dropout rate')
-    group.add_argument("-wd", "--weight_decay",
-                       default=1e-4, type=float, help="Weight decay rate. (default %(default)f)")
+    group.add_argument("-dr", "--drop_rate", type=float, default=0, help='dropout rate')
+    group.add_argument("-wd", "--weight_decay", type=float,
+                       default=1e-4, help="Weight decay rate. (default %(default)f)")
     group.add_argument("--ckpt", type=str, help="You can specify a checkpoint for restoring. "
                                                 "If not specified, the program will try to restore checkpoint "
                                                 "from 'model_dir/tag' directory.")
     group.add_argument("-sb", "--save_best_ckpt", action="store_true", help="Save best checkpoint")
     group.add_argument("-lb", "--load_best_ckpt", action="store_true", help="Load best checkpoint")
 
-    group = parser.add_argument_group(title="Densenet Arguments")
-    group.add_argument("--no_bottleneck", action="store_true")
-    group.add_argument("--compression", type=float, default=0.5)
-    group.add_argument("--layers_per_block", type=int, nargs="+")
-    group.add_argument("--growth_rate", type=int)
+    group = parser.add_argument_group(title="Few Shot Arguments")
+    group.add_argument("-w", "--num_ways", type=int, default=5)
+    group.add_argument("-s", "--num_shots", type=int, default=1)
+    group.add_argument("--num_train_batches", type=int, default=1000, help="Number of training batches per epoch")
+    group.add_argument("--num_val_batches", type=int, default=250, help="Number of validation batches per epoch")
+    group.add_argument("--num_test_batches", type=int, default=1000, help="Number of test batches in total")
+    group.add_argument("--train_seed", type=int, help="Random seed for generate training batches")
+    group.add_argument("--val_seed", type=int, default=1234, help="Random seed for generate validation batches")
+    group.add_argument("--test_seed", type=int, default=5678, help="Random seed for generate test batches")
+    group.add_argument("--aug_class", action="store_true", help="Augment classes by rotating k * 90 degrees")
+
+    group = parser.add_argument_group(title="MatchingNetwork Arguments")
+    group.add_argument("--fce", action="store_true", help="Whether or not to use Fully Context Embeddings module")
+    group.add_argument("--process_steps", type=int, default=5, help="Number of processing steps in Fully Context "
+                                                                    "Embeddings module")
 
     solver.add_arguments(parser)
     return parser
 
 
-def get_model(x_images, y_labels, mode, dataset, args):
+def get_model(sup_inputs, sup_labels, que_inputs, que_labels, mode, dataset, args):
     """
     Define core model and loss function using inputs x_images and y_labels
 
     Parameters
     ----------
-    x_images: Tensor
-        model inputs with shape [batch_size, height, width, channels]
-    y_labels: Tensor
-        ground truth tensor. If args.mixup is True, then y_labels have shape [batch_size, num_classes],
-        else [batch_size]
+    sup_inputs: Tensor
+        support set inputs with shape [batch_size, num_ways, num_shots, height, width, channels]
+    sup_labels: Tensor
+        support set ground truth tensor with shape [batch_size, num_ways, num_shots]
+    que_inputs: Tensor
+        query image with shape [batch_size, height, width, channels]
+    que_labels: Tensor
+        query image ground truth with shape [batch_size]
     mode: str
         Training mode. Valid values are [train, test]
     dataset: dict
@@ -107,50 +112,46 @@ def get_model(x_images, y_labels, mode, dataset, args):
     scaffold: dict
         A scaffold contains fetches, optimizer, metrics, summary writer, saver, etc.
     """
-    inputs = K.Input(tensor=x_images)
-    if "resnet_v2" in args.net_name:
+    sup_inputs = K.Input(tensor=sup_inputs)
+    sup_labels = K.Input(tensor=sup_labels)
+    que_inputs = K.Input(tensor=que_inputs)
+    if "matchingnetwork" in args.net_name:
         kwargs = {"kernel_initializer": "he_normal"}
-        net = net_lib.resnet_v2(int(args.net_name.split("_")[2]), args.init_channel or 64,
-                                dataset["num_classes"], dataset["first_downsample"],
-                                args.drop_rate, weight_decay=args.weight_decay, **kwargs)
-    elif "resnet" in args.net_name:
-        kwargs = {"kernel_initializer": "he_normal"}
-        net = net_lib.resnet(int(args.net_name.split("_")[1]), args.init_channel or 64,
-                             dataset["num_classes"], dataset["first_downsample"],
-                             args.drop_rate, weight_decay=args.weight_decay, **kwargs)
-    elif "densenet" in args.net_name:
-        net = net_lib.densenet(int(args.net_name.split("_")[1]), dataset["num_classes"],
-                               dataset["first_downsample"], args.init_channel, args.growth_rate,
-                               args.layers_per_block, not args.no_bottleneck, args.compression,
-                               args.drop_rate, args.weight_decay)
+        net = net_lib.MatchingNetwork([64] * 4, dataset["num_classes"], args.process_steps, args.fce,
+                                      sup_shape=dataset["shape"], **kwargs)
     else:
         raise NotImplementedError
 
-    y_logits = net(inputs)
-    model = K.Model(inputs=inputs, outputs=y_logits)
+    y_logits = net((sup_inputs, sup_labels, que_inputs))
+    model = K.Model(inputs=[sup_inputs, sup_labels, que_inputs], outputs=y_logits)
     scaffold = {"model": model}
 
     with tf.name_scope("Loss"):
-        if args.mixup:
-            ce_loss = tf.losses.softmax_cross_entropy(y_labels, y_logits)
-        else:
-            ce_loss = tf.losses.sparse_softmax_cross_entropy(y_labels, y_logits)
-        regu_loss = tf.add_n(model.losses)
-        total_loss = ce_loss + regu_loss
+        que_labels_oh = tf.one_hot(que_labels, args.num_ways)
+        ce_loss = -tf.reduce_sum(que_labels_oh * tf.log(y_logits), axis=-1)
+        ce_loss = tf.reduce_mean(ce_loss)
+        # regu_loss = tf.add_n(model.losses)
+        # total_loss = ce_loss + regu_loss
+        total_loss = ce_loss
 
     if mode == "train":
         optimizer = solver.Solver(args, dataset["train"]["steps"])
         scaffold["optimizer"] = optimizer
         scaffold["fetches"] = {"train_op": optimizer.minimize(total_loss, model.updates),
-                               "total_loss": total_loss, "regu_loss": regu_loss}
+                               # "total_loss": total_loss, "regu_loss": regu_loss}
+                               "total_loss": total_loss}
         # Define checkpoint saver and summary writer
         scaffold["writer"] = tf.summary.FileWriter(args.model_dir, graph=tf.get_default_graph())
         # Define summary
-        tf.summary.image("image", x_images)
+        with tf.name_scope("summary_image"):
+            patched_row = tf.concat(tf.unstack(sup_inputs, axis=1), axis=2)     # [bs, shots, ways * h, w, 1]
+            patched_image = tf.concat(tf.unstack(patched_row, axis=1), axis=2)    # [bs, ways*h, shots * w, 1]
+        tf.summary.image("sup_images", patched_image)
+        tf.summary.image("que_image", que_inputs)
         tf.summary.scalar("learning_rate", optimizer.lr)
         scaffold["summaries"] = tf.summary.merge_all()
     elif mode == "test":
-        scaffold["fetches"] = {"total_loss": total_loss, "regu_loss": regu_loss}
+        scaffold["fetches"] = {"total_loss": total_loss}
     else:
         raise NotImplementedError
 
@@ -160,9 +161,7 @@ def get_model(x_images, y_labels, mode, dataset, args):
 
     with tf.name_scope("Metric"):
         y_pred = tf.argmax(y_logits, axis=1, output_type=tf.int32)
-        if args.mixup:
-            y_labels = tf.argmax(y_labels, axis=1, output_type=tf.int32)
-        accuracy, acc_update = tf.metrics.accuracy(y_labels, y_pred)
+        accuracy, acc_update = tf.metrics.accuracy(que_labels, y_pred)
     scaffold["metrics"] = {"acc": accuracy, "acc_up": acc_update}
 
     return scaffold
@@ -209,7 +208,7 @@ def train(args, dataset, scaffold, logger):
 
     log_loss_acc = tools.Accumulator()
     total_loss_acc = tools.Accumulator()
-    regu_loss_acc = tools.Accumulator()
+    # regu_loss_acc = tools.Accumulator()
     val_loss_acc = tools.Accumulator()
     best_acc = 0.
     best_epoch = 0.
@@ -231,7 +230,7 @@ def train(args, dataset, scaffold, logger):
                 ti.toc()
                 total_loss_acc.update(fetches_val["total_loss"])
                 log_loss_acc.update(fetches_val["total_loss"])
-                regu_loss_acc.update(fetches_val["regu_loss"])
+                # regu_loss_acc.update(fetches_val["regu_loss"])
                 if ti.calls % args.log_step == 0:
                     logger.info("Epoch %d/%d Step %d/%d - Train loss: %.4f - %.2f step/s",
                                 i + 1, total_epochs, ti.calls, dataset["train"]["steps"],
@@ -269,8 +268,10 @@ def train(args, dataset, scaffold, logger):
         else:
             logger.info("Epoch %d/%d - Train loss: %.4f, %.2f step/s",
                         i + 1, total_epochs, total_loss_acc.avg, ti.speed)
-        summary_kits.summary_scalar(writer, i, ["train_loss", "regu_loss"] + list(val_summ.keys()),
-                                    [total_loss_acc.pop(), regu_loss_acc.pop()] + list(val_summ.values()))
+        # summary_kits.summary_scalar(writer, i, ["train_loss", "regu_loss"] + list(val_summ.keys()),
+        #                             [total_loss_acc.pop(), regu_loss_acc.pop()] + list(val_summ.values()))
+        summary_kits.summary_scalar(writer, i, ["train_loss"] + list(val_summ.keys()),
+                                    [total_loss_acc.pop()] + list(val_summ.values()))
         save_path = saver.save(sess, args.model_dir + "/" + args.tag, i, write_meta_graph=False)
         logger.info("Save checkpoint to %s", save_path)
         ti.reset()
@@ -336,30 +337,24 @@ def main():
         if args.mode == "train":
             # Dataset
             with tf.name_scope("DataLoader"):
-                dataset = factory.small_dataset(args.dataset, "train", args.batch_size, args.workers,
-                                                train_val_split=not args.no_val)
-                x_images, y_labels = dataset["parent_iter"].get_next()
-            if args.mixup:
-                with tf.name_scope("Switch"):
-                    y_labels = tf.one_hot(y_labels, dataset["num_classes"])
-
-                    def true_fn():
-                        return transforms.Mixup(args.mix_alpha)(x_images, y_labels)
-
-                    def false_fn():
-                        return x_images, y_labels
-
-                    x_images, y_labels = tf.cond(K.backend.learning_phase(), true_fn, false_fn)
-            else:
-                # We call learning_phase() here to create placeholder outside model scope.
-                K.backend.learning_phase()
-            scaffold = get_model(x_images, y_labels, args.mode, dataset, args)
+                dataset = factory.few_shot_dataset(args.dataset, "train", args.batch_size,
+                                                   args.num_ways, args.num_shots, not args.no_val,
+                                                   args.num_train_batches, args.num_val_batches, None,
+                                                   args.aug_class, args.train_seed, args.val_seed)
+                inputs = dataset["parent_iter"].get_next()
+            # We call learning_phase() here to create placeholder outside model scope.
+            K.backend.learning_phase()
+            scaffold = get_model(*inputs, args.mode, dataset, args)
             train(args, dataset, scaffold, logger)
         elif args.mode == "test":
             with tf.name_scope("DataLoader"):
-                dataset = factory.small_dataset(args.dataset, "test", args.batch_size, args.workers)
-                x_images, y_labels = dataset["parent_iter"].get_next()
-            scaffold = get_model(x_images, y_labels, args.mode, dataset, args)
+                dataset = factory.few_shot_dataset(args.dataset, "test", args.batch_size,
+                                                   args.num_ways, args.num_shots,
+                                                   num_test_batches=args.num_test_batches,
+                                                   augment_classes=args.aug_class,
+                                                   test_seed=args.test_seed)
+                inputs = dataset["parent_iter"].get_next()
+            scaffold = get_model(*inputs, args.mode, dataset, args)
             test(args, dataset, scaffold, logger)
         else:
             raise NotImplementedError

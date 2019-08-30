@@ -46,7 +46,7 @@ class ResBlock(base.BaseNet):
                  output_channels,
                  strides=1,
                  drop_rate=0,
-                 use_bottleneck=True,
+                 expansion=1,
                  bn_params=None,
                  name=None,
                  **kwargs):
@@ -61,7 +61,7 @@ class ResBlock(base.BaseNet):
         super(ResBlock, self).__init__(name)
 
         self.layers = []
-        if not use_bottleneck:
+        if expansion == 1:
             self.layers.append(L.BatchNormalization(name=self.name + "norm1", **bn_params))
             self.layers.append(L.ReLU(name=self.name + "relu1"))
             self.layers.append(L.Conv2D(output_channels, 3, strides, name=self.name + "conv1", **kwargs))
@@ -81,14 +81,14 @@ class ResBlock(base.BaseNet):
                 self.layers.append(L.Dropout(drop_rate, name=self.name + "dropout"))
             self.layers.append(L.BatchNormalization(name=self.name + "norm3", **bn_params))
             self.layers.append(L.ReLU(name=self.name + "relu3"))
-            self.layers.append(L.Conv2D(output_channels * 4, 1, name=self.name + "conv3", **kwargs))
+            self.layers.append(L.Conv2D(output_channels * expansion, 1, name=self.name + "conv3", **kwargs))
         
         self.shortcuts = []
-        if strides != 1 or use_bottleneck or input_channels != output_channels:
+        if strides != 1 or input_channels != expansion * output_channels:
             # TODO(Alter): Maybe use max_pool when stride != 1
             self.shortcuts.append(L.BatchNormalization(name=self.name + "norms", **bn_params))
             self.shortcuts.append(L.ReLU(name=self.name + "relus"))
-            self.shortcuts.append(L.Conv2D(output_channels * (4 if use_bottleneck else 1), 1, strides,
+            self.shortcuts.append(L.Conv2D(output_channels * expansion, 1, strides,
                                            name=self.name + "convs", **kwargs))
         # Must use keras.layers.add, instead of tf.add
         self.add = L.Add(name=self.name + "add")
@@ -110,7 +110,7 @@ class ResModule(base.BaseNet):
                  num_blocks, 
                  strides,
                  drop_rate=0,
-                 use_bottleneck=True,
+                 expansion=1,
                  bn_params=None,
                  name=None,
                  **kwargs):
@@ -119,9 +119,9 @@ class ResModule(base.BaseNet):
         self.blocks = []
         for i in range(num_blocks):
             self.blocks.append(ResBlock(input_channels, output_channels, 1 if i != 0 else strides,
-                                        drop_rate, use_bottleneck, bn_params,
+                                        drop_rate, expansion, bn_params,
                                         name=self.name + ("block%d" % (i + 1)), **kwargs))
-            input_channels = output_channels * (4 if use_bottleneck else 1)
+            input_channels = output_channels * expansion
 
     def __call__(self, inputs, *args, **kwargs):
         x = inputs
@@ -158,12 +158,13 @@ class ResNetV2(base.BaseNet):
 
         input_channels = base_channels
         output_channels = input_channels
+        expansion = 4 if use_bottleneck else 1
         conv_params["use_bias"] = False
         for i, num_blocks in enumerate(block_num):
             self.modules.append(ResModule(input_channels, output_channels, num_blocks,
-                                          1 + int(i != 0), drop_rate, use_bottleneck, bn_params,
+                                          1 + int(i != 0), drop_rate, expansion, bn_params,
                                           name=self.name + ("module%d" % (i + 1)), **conv_params))
-            input_channels = output_channels * (4 if use_bottleneck else 1)
+            input_channels = output_channels * expansion
             output_channels = output_channels * 2
 
         # Final bn+relu

@@ -11,12 +11,12 @@ if [[ "$TASK" == "train" ]]; then
     PYTHONPATH=${PROJECT_DIR} PYTHONNOUSERSITE=True CUDA_VISIBLE_DEVICES=${GPU_ID} KMP_WARNINGS=0 python main.py \
         --mode train \
         --tag ${BASE_NAME%".sh"} \
-        --dataset cifar10 \
+        --dataset cifar100 \
         --batch_size 256 \
-        --net_name resnet_v2_18 \
+        --net-name resnet_v2_34 \
         --total_epochs 200 \
         --log_step 50 \
-        --weight_decay 0.0005 \
+        --weight_decay 0.0003 \
         --learning_policy custom_step \
         --lr_decay_boundaries 100 150 \
         --lr_custom_values 0.1 0.01 0.001 \
@@ -26,14 +26,14 @@ elif [[ "$TASK" == "test" ]]; then
     PYTHONPATH=${PROJECT_DIR} PYTHONNOUSERSITE=True CUDA_VISIBLE_DEVICES=${GPU_ID} KMP_WARNINGS=0 python main.py \
         --mode test \
         --tag ${BASE_NAME%".sh"} \
-        --dataset cifar10 \
-        --net_name resnet_v2_18 \
+        --dataset cifar100 \
+        --net-name resnet_v2_34 \
         $@
 elif [[ "$TASK" == "infer" ]]; then
     PYTHONPATH=${PROJECT_DIR} CUDA_VISIBLE_DEVICES=${GPU_ID} KMP_WARNINGS=0 python main.py \
         --mode infer \
         --tag ${BASE_NAME%".sh"} \
-        --dataset cifar10 \
-        --net_name resnet_v2_18 \
+        --dataset cifar100 \
+        --net-name resnet_v2_34 \
         $@
 fi
